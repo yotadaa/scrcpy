@@ -256,7 +256,7 @@ sc_screen_update_content_rect(struct sc_screen *screen) {
 //
 // Set the update_content_rect flag if the window or content size may have
 // changed, so that the content rectangle is recomputed
-static void
+void
 sc_screen_render(struct sc_screen *screen, bool update_content_rect) {
     assert(screen->window_shown);
 
@@ -337,6 +337,74 @@ sc_screen_render(struct sc_screen *screen, bool update_content_rect) {
 
     if (!ok) {
         LOGE("Could not render texture: %s", SDL_GetError());
+    }
+
+    // Overlay for keyboard -> touch bindings (BlueStacks-style on-screen controls)
+    if (!screen->is_icon_active && screen->im.touch_bindings_count > 0) {
+        float pixel_scale = SDL_GetWindowPixelDensity(screen->window);
+        if (pixel_scale == 0.0f) {
+            pixel_scale = 1.0f;
+        }
+
+        int32_t cw = screen->content_size.width;
+        int32_t ch = screen->content_size.height;
+        enum sc_orientation orientation = screen->orientation;
+
+        for (size_t i = 0; i < screen->im.touch_bindings_count; i++) {
+            struct sc_touch_binding *b = &screen->im.touch_bindings[i];
+
+            int32_t fx = b->x;
+            int32_t fy = b->y;
+            int32_t cx = 0;
+            int32_t cy = 0;
+
+            switch (orientation) {
+                case SC_ORIENTATION_0:
+                    cx = fx; cy = fy; break;
+                case SC_ORIENTATION_90:
+                    cx = cw - fy; cy = fx; break;
+                case SC_ORIENTATION_180:
+                    cx = cw - fx; cy = ch - fy; break;
+                case SC_ORIENTATION_270:
+                    cx = fy; cy = ch - fx; break;
+                case SC_ORIENTATION_FLIP_0:
+                    cx = cw - fx; cy = fy; break;
+                case SC_ORIENTATION_FLIP_90:
+                    cx = cw - fy; cy = ch - fx; break;
+                case SC_ORIENTATION_FLIP_180:
+                    cx = fx; cy = ch - fy; break;
+                default: // FLIP_270
+                    cx = fy; cy = fx; break;
+            }
+
+            if (cw <= 0 || ch <= 0) {
+                continue;
+            }
+
+            float wx = screen->rect.x + ((float) cx * screen->rect.w / (float) cw);
+            float wy = screen->rect.y + ((float) cy * screen->rect.h / (float) ch);
+            wx *= pixel_scale;
+            wy *= pixel_scale;
+
+            if (b->pressed) {
+                SDL_SetRenderDrawColor(renderer, 255, 215, 0, 220);
+            } else {
+                SDL_SetRenderDrawColor(renderer, 255, 255, 255, 160);
+            }
+
+            SDL_FRect r = { wx - 24.0f, wy - 24.0f, 48.0f, 48.0f };
+            SDL_RenderFillRect(renderer, &r);
+
+            SDL_SetRenderDrawColor(renderer, 0, 0, 0, 220);
+            SDL_RenderRect(renderer, &r);
+
+            if (b->label) {
+                SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
+                SDL_RenderDebugText(renderer, wx - 6.0f, wy - 6.0f, b->label);
+            } else {
+                // nothing
+            }
+        }
     }
 
 end:
@@ -703,6 +771,7 @@ sc_screen_init(struct sc_screen *screen,
         .legacy_paste = params->legacy_paste,
         .clipboard_autosync = params->clipboard_autosync,
         .shortcut_mods = params->shortcut_mods,
+        .touch_map_file = params->touch_map,
     };
 
     sc_input_manager_init(&screen->im, &im_params);

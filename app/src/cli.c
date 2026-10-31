@@ -112,6 +112,7 @@ enum {
     OPT_IGNORE_VIDEO_ENCODER_CONSTRAINTS,
     OPT_NO_TERMINAL_TITLE,
     OPT_HWDEC,
+    OPT_TOUCH_MAP,
 };
 
 struct sc_option {
@@ -1042,6 +1043,12 @@ static const struct sc_option options[] = {
         .longopt = "window-title",
         .argdesc = "text",
         .text = "Set a custom window title.",
+    },
+    {
+        .longopt_id = OPT_TOUCH_MAP,
+        .longopt = "touch-map",
+        .argdesc = "file",
+        .text = "Load a touch binding map (key x y [label] per line).",
     },
     {
         .longopt_id = OPT_WINDOW_X,
@@ -2687,6 +2694,9 @@ parse_args_with_getopt(struct scrcpy_cli_args *args, int argc, char *argv[],
                 break;
             case OPT_WINDOW_TITLE:
                 opts->window_title = optarg;
+                break;
+            case OPT_TOUCH_MAP:
+                opts->touch_map = optarg;
                 break;
             case OPT_WINDOW_X:
                 if (!parse_window_position(optarg, &opts->window_x)) {

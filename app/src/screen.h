@@ -128,6 +128,7 @@ struct sc_screen_params {
     bool legacy_paste;
     bool clipboard_autosync;
     uint8_t shortcut_mods; // OR of enum sc_shortcut_mod values
+    const char *touch_map;
 
     const char *window_title;
     bool always_on_top;
@@ -194,6 +195,9 @@ sc_screen_set_orientation(struct sc_screen *screen,
                           enum sc_orientation orientation);
 
 // set the display pause state
+void
+sc_screen_render(struct sc_screen *screen, bool update_content_rect);
+
 void
 sc_screen_set_paused(struct sc_screen *screen, bool paused);
 

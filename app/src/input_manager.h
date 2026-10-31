@@ -15,6 +15,15 @@
 #include "trait/key_processor.h"
 #include "trait/mouse_processor.h"
 
+struct sc_touch_binding {
+    SDL_Keycode key;
+    int32_t x;
+    int32_t y;
+    char *label;
+    uint64_t pointer_id;
+    bool pressed;
+};
+
 struct sc_input_manager {
     struct sc_controller *controller;
     struct sc_file_pusher *fp;
@@ -29,6 +38,9 @@ struct sc_input_manager {
     struct sc_mouse_bindings mouse_bindings;
     bool legacy_paste;
     bool clipboard_autosync;
+
+    struct sc_touch_binding *touch_bindings;
+    size_t touch_bindings_count;
 
     uint16_t sdl_shortcut_mods;
 
@@ -62,6 +74,7 @@ struct sc_input_manager_params {
     struct sc_mouse_bindings mouse_bindings;
     bool legacy_paste;
     bool clipboard_autosync;
+    const char *touch_map_file;
     uint8_t shortcut_mods; // OR of enum sc_shortcut_mod values
 };
 
@@ -72,5 +85,8 @@ sc_input_manager_init(struct sc_input_manager *im,
 void
 sc_input_manager_handle_event(struct sc_input_manager *im,
                               const SDL_Event *event);
+
+void
+sc_input_manager_release_touch_bindings(struct sc_input_manager *im);
 
 #endif

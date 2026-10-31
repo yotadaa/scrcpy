@@ -14,6 +14,112 @@
 #include "util/log.h"
 #include "util/sdl.h"
 
+
+#include <stdio.h>
+
+static void
+sc_input_manager_parse_touch_map(struct sc_input_manager *im,
+                                const char *path) {
+    im->touch_bindings = NULL;
+    im->touch_bindings_count = 0;
+
+    if (!path) {
+        return;
+    }
+
+    FILE *f = fopen(path, "r");
+    if (!f) {
+        LOGE("Could not open touch map file: %s", path);
+        return;
+    }
+
+    char line[512];
+    size_t cap = 0;
+    while (fgets(line, sizeof(line), f)) {
+        char *comment = strchr(line, '#');
+        if (comment) {
+            *comment = '\0';
+        }
+
+        char keyname[64];
+        int x = 0;
+        int y = 0;
+        char label[128] = {0};
+        int n = sscanf(line, "%63s %d %d %127[^\n]", keyname, &x, &y, label);
+        if (n < 3) {
+            continue;
+        }
+
+        SDL_Keycode keycode = SDL_GetKeyFromName(keyname);
+        if (keycode == SDLK_UNKNOWN) {
+            LOGW("Unknown key in touch map: %s", keyname);
+            continue;
+        }
+
+        if (im->touch_bindings_count == cap) {
+            cap = cap ? cap * 2 : 16;
+            struct sc_touch_binding *tmp = realloc(im->touch_bindings,
+                                                  cap * sizeof(*tmp));
+            if (!tmp) {
+                LOG_OOM();
+                break;
+            }
+            im->touch_bindings = tmp;
+        }
+
+        struct sc_touch_binding *b = &im->touch_bindings[im->touch_bindings_count++];
+        b->key = keycode;
+        b->x = x;
+        b->y = y;
+        b->label = (label[0] != '\0') ? strdup(label) : NULL;
+        b->pointer_id = UINT64_C(0x1000) + (uint64_t) (im->touch_bindings_count - 1);
+        b->pressed = false;
+    }
+
+    fclose(f);
+    LOGI("Loaded %zu touch binding(s) from %s", im->touch_bindings_count, path);
+}
+
+static struct sc_touch_binding *
+sc_input_manager_find_touch_binding(struct sc_input_manager *im,
+                                   SDL_Keycode keycode) {
+    for (size_t i = 0; i < im->touch_bindings_count; i++) {
+        if (im->touch_bindings[i].key == keycode) {
+            return &im->touch_bindings[i];
+        }
+    }
+    return NULL;
+}
+
+static void
+sc_input_manager_send_touch_binding(struct sc_input_manager *im,
+                                   struct sc_touch_binding *binding,
+                                   bool down) {
+    assert(im->controller);
+
+    struct sc_control_msg msg = {
+        .type = SC_CONTROL_MSG_TYPE_INJECT_TOUCH_EVENT,
+        .inject_touch_event = {
+            .action = down ? AMOTION_EVENT_ACTION_DOWN
+                           : AMOTION_EVENT_ACTION_UP,
+            .pointer_id = binding->pointer_id,
+            .position = {
+                .screen_size = im->screen->frame_size,
+                .point = { .x = binding->x, .y = binding->y },
+            },
+            .pressure = down ? 1.f : 0.f,
+            .buttons = 0,
+        },
+    };
+
+    if (!sc_controller_push_msg(im->controller, &msg)) {
+        LOGW("Could not request 'inject touch binding'");
+    } else {
+        LOGI("Injected touch binding %s at (%d, %d)", down ? "DOWN" : "UP",
+             binding->x, binding->y);
+    }
+}
+
 void
 sc_input_manager_init(struct sc_input_manager *im,
                       const struct sc_input_manager_params *params) {
@@ -34,6 +140,9 @@ sc_input_manager_init(struct sc_input_manager *im,
     im->legacy_paste = params->legacy_paste;
     im->clipboard_autosync = params->clipboard_autosync;
 
+    im->touch_bindings = NULL;
+    im->touch_bindings_count = 0;
+
     im->sdl_shortcut_mods = sc_shortcut_mods_to_sdl(params->shortcut_mods);
 
     im->vfinger_down = false;
@@ -47,6 +156,8 @@ sc_input_manager_init(struct sc_input_manager *im,
     im->key_repeat = 0;
 
     im->next_sequence = 1; // 0 is reserved for SC_SEQUENCE_INVALID
+
+    sc_input_manager_parse_touch_map(im, params->touch_map_file);
 
     im->disconnected = false;
 }
@@ -428,6 +539,32 @@ sc_input_manager_process_key(struct sc_input_manager *im,
     bool ctrl = mod & SDL_KMOD_CTRL;
     bool shift = mod & SDL_KMOD_SHIFT;
     bool repeat = event->repeat;
+
+    struct sc_touch_binding *touch_binding =
+        sc_input_manager_find_touch_binding(im, sdl_keycode);
+    if (touch_binding) {
+        if (im->controller && !im->camera && !im->screen->paused &&
+            !im->disconnected) {
+            if (down) {
+                if (!repeat && !touch_binding->pressed) {
+                    touch_binding->pressed = true;
+                    sc_input_manager_send_touch_binding(im, touch_binding, true);
+                    if (im->screen->window_shown) {
+                        sc_screen_render(im->screen, false);
+                    }
+                }
+            } else {
+                if (touch_binding->pressed) {
+                    touch_binding->pressed = false;
+                    sc_input_manager_send_touch_binding(im, touch_binding, false);
+                    if (im->screen->window_shown) {
+                        sc_screen_render(im->screen, false);
+                    }
+                }
+            }
+        }
+        return;
+    }
 
     // Either the modifier includes a shortcut modifier, or the key
     // press/release is a modifier key.
@@ -1156,10 +1293,26 @@ sc_input_manager_process_file(struct sc_input_manager *im,
 static void
 sc_input_manager_on_device_disconnected(struct sc_input_manager *im) {
     im->disconnected = true;
+    sc_input_manager_release_touch_bindings(im);
 
     struct sc_fps_counter *fps_counter = &im->screen->fps_counter;
     if (sc_fps_counter_is_started(fps_counter)) {
         sc_fps_counter_stop(fps_counter);
+    }
+}
+
+
+void
+sc_input_manager_release_touch_bindings(struct sc_input_manager *im) {
+    if (!im->controller) {
+        return;
+    }
+    for (size_t i = 0; i < im->touch_bindings_count; i++) {
+        struct sc_touch_binding *b = &im->touch_bindings[i];
+        if (b->pressed) {
+            b->pressed = false;
+            sc_input_manager_send_touch_binding(im, b, false);
+        }
     }
 }
 
@@ -1202,6 +1355,9 @@ sc_input_manager_handle_event(struct sc_input_manager *im,
             break;
         case SDL_EVENT_DROP_FILE:
             sc_input_manager_process_file(im, &event->drop);
+            break;
+        case SDL_EVENT_WINDOW_FOCUS_LOST:
+            sc_input_manager_release_touch_bindings(im);
             break;
         case SC_EVENT_DEVICE_DISCONNECTED:
             sc_input_manager_on_device_disconnected(im);
