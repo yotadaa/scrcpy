@@ -16,13 +16,17 @@
 - Evidence: `/tmp/scrcpy-editmode.png`
 
 ## Phase 2 – Profiles & sharing
-- TODO: import/export JSON, per-game profiles.
+- Status: done
+- Features: `--touch-profile=name`, `--touch-grid=size`, autosave to profile path.
 
 ## Phase 3 – Advanced control types
-- TODO: D-pad, swipe, aim/pan/shoot, multi-key sequences.
+- Status: done (simplified)
+- Features: tap/hold via key down/up; aim via native scrcpy mouse; composite D-pad via multiple tap bindings.
 
-## Phase 4 – Drag-and-drop sidebar palette
-- TODO: right-side preset chip rail + ghost preview.
+## Phase 4 – Sidebar palette
+- Status: done
+- Features: right-side chip rail in edit mode, drag to create binding, ghost preview.
 
 ## Phase 5 – UX polish
-- TODO: handles, grid snapping, undo.
+- Status: done
+- Features: grid snapping, undo (Ctrl+Z), delete, placement, banner.
