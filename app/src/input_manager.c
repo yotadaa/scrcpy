@@ -1,6 +1,7 @@
 #include "input_manager.h"
 
 #include <assert.h>
+#include <sys/stat.h>
 #include <stdlib.h>
 #include <string.h>
 #include <SDL3/SDL.h>
@@ -22,6 +23,15 @@ sc_input_manager_parse_touch_map(struct sc_input_manager *im,
                                 const char *path) {
     im->touch_bindings = NULL;
     im->touch_bindings_count = 0;
+
+    im->edit_mode = false;
+    im->touch_dragging = false;
+    im->drag_binding = NULL;
+    im->drag_offset_x = 0;
+    im->drag_offset_y = 0;
+    im->touch_placing = false;
+    im->place_x = 0;
+    im->place_y = 0;
 
     if (!path) {
         return;
@@ -120,6 +130,114 @@ sc_input_manager_send_touch_binding(struct sc_input_manager *im,
     }
 }
 
+
+static struct sc_touch_binding *
+sc_input_manager_touch_binding_at(struct sc_input_manager *im,
+                                 int window_x, int window_y) {
+    if (!im->screen->video) {
+        return NULL;
+    }
+    struct sc_point point =
+        sc_screen_convert_window_to_frame_coords(im->screen, window_x, window_y);
+
+    struct sc_touch_binding *best = NULL;
+    int best_dist2 = 80 * 80;
+    for (size_t i = 0; i < im->touch_bindings_count; i++) {
+        struct sc_touch_binding *b = &im->touch_bindings[i];
+        int dx = point.x - b->x;
+        int dy = point.y - b->y;
+        int dist2 = dx * dx + dy * dy;
+        if (dist2 < best_dist2) {
+            best_dist2 = dist2;
+            best = b;
+        }
+    }
+    return best;
+}
+
+static void
+sc_input_manager_append_touch_binding(struct sc_input_manager *im,
+                                     SDL_Keycode key, int32_t x, int32_t y,
+                                     const char *label) {
+    struct sc_touch_binding *tmp = realloc(im->touch_bindings,
+        (im->touch_bindings_count + 1) * sizeof(*tmp));
+    if (!tmp) {
+        LOG_OOM();
+        return;
+    }
+    im->touch_bindings = tmp;
+    struct sc_touch_binding *b =
+        &im->touch_bindings[im->touch_bindings_count++];
+    b->key = key;
+    b->x = x;
+    b->y = y;
+    b->label = label ? strdup(label) : NULL;
+    b->pointer_id = UINT64_C(0x1000) + (uint64_t) (im->touch_bindings_count - 1);
+    b->pressed = false;
+}
+
+static void
+sc_input_manager_remove_touch_binding(struct sc_input_manager *im,
+                                     struct sc_touch_binding *binding) {
+    if (!binding) {
+        return;
+    }
+    size_t index = (size_t) (binding - im->touch_bindings);
+    if (index >= im->touch_bindings_count) {
+        return;
+    }
+    free(im->touch_bindings[index].label);
+    if (index + 1 < im->touch_bindings_count) {
+        memmove(&im->touch_bindings[index], &im->touch_bindings[index + 1],
+                (im->touch_bindings_count - index - 1) * sizeof(*im->touch_bindings));
+    }
+    im->touch_bindings_count--;
+    if (im->touch_bindings_count == 0) {
+        free(im->touch_bindings);
+        im->touch_bindings = NULL;
+    }
+}
+
+static void
+sc_input_manager_save_touch_bindings(struct sc_input_manager *im) {
+    const char *path = im->touch_map_file;
+    char default_path[512];
+    if (!path) {
+        const char *home = getenv("HOME");
+        if (!home) {
+            return;
+        }
+        snprintf(default_path, sizeof(default_path),
+                 "%s/.config/scrcpy/touchmap.txt", home);
+        path = default_path;
+    }
+
+    // ensure parent directory
+    char dir[512];
+    snprintf(dir, sizeof(dir), "%s", path);
+    char *slash = strrchr(dir, '/');
+    if (slash) {
+        *slash = '\0';
+        mkdir(dir, 0755);
+    }
+
+    FILE *f = fopen(path, "w");
+    if (!f) {
+        LOGW("Could not save touch map: %s", path);
+        return;
+    }
+    for (size_t i = 0; i < im->touch_bindings_count; i++) {
+        struct sc_touch_binding *b = &im->touch_bindings[i];
+        fprintf(f, "%s %d %d", SDL_GetKeyName(b->key), (int) b->x, (int) b->y);
+        if (b->label) {
+            fprintf(f, " %s", b->label);
+        }
+        fputc('\n', f);
+    }
+    fclose(f);
+    LOGI("Saved %zu touch binding(s) to %s", im->touch_bindings_count, path);
+}
+
 void
 sc_input_manager_init(struct sc_input_manager *im,
                       const struct sc_input_manager_params *params) {
@@ -139,6 +257,7 @@ sc_input_manager_init(struct sc_input_manager *im,
     im->mouse_bindings = params->mouse_bindings;
     im->legacy_paste = params->legacy_paste;
     im->clipboard_autosync = params->clipboard_autosync;
+    im->touch_map_file = params->touch_map_file;
 
     im->touch_bindings = NULL;
     im->touch_bindings_count = 0;
@@ -540,6 +659,35 @@ sc_input_manager_process_key(struct sc_input_manager *im,
     bool shift = mod & SDL_KMOD_SHIFT;
     bool repeat = event->repeat;
 
+    // BlueStacks-style editor toggle
+    if (sdl_keycode == SDLK_F9 && down && !repeat) {
+        im->edit_mode = !im->edit_mode;
+        im->touch_dragging = false;
+        im->drag_binding = NULL;
+        im->touch_placing = false;
+        if (im->screen->window_shown) {
+            sc_screen_render(im->screen, false);
+        }
+        return;
+    }
+
+    // Finish pending placement: next key creates a control at the clicked spot
+    if (im->edit_mode && im->touch_placing && down && !repeat) {
+        struct sc_point point =
+            sc_screen_convert_window_to_frame_coords(im->screen,
+                                                    im->place_x, im->place_y);
+        char *label = strdup(SDL_GetKeyName(sdl_keycode));
+        sc_input_manager_append_touch_binding(im, sdl_keycode,
+                                             point.x, point.y, label);
+        free(label);
+        im->touch_placing = false;
+        sc_input_manager_save_touch_bindings(im);
+        if (im->screen->window_shown) {
+            sc_screen_render(im->screen, false);
+        }
+        return;
+    }
+
     struct sc_touch_binding *touch_binding =
         sc_input_manager_find_touch_binding(im, sdl_keycode);
     if (touch_binding) {
@@ -892,6 +1040,26 @@ sc_input_manager_process_mouse_motion(struct sc_input_manager *im,
         return;
     }
 
+    if (im->edit_mode) {
+        if (im->touch_dragging && im->drag_binding) {
+            struct sc_point point =
+                sc_screen_convert_window_to_frame_coords(im->screen,
+                                                        event->x, event->y);
+            im->drag_binding->x = point.x;
+            im->drag_binding->y = point.y;
+            if (im->screen->window_shown) {
+                sc_screen_render(im->screen, false);
+            }
+        } else if (im->touch_placing) {
+            im->place_x = event->x;
+            im->place_y = event->y;
+            if (im->screen->window_shown) {
+                sc_screen_render(im->screen, false);
+            }
+        }
+        return;
+    }
+
     struct sc_mouse_motion_event evt = {
         .position = sc_input_manager_get_position(im, event->x, event->y),
         .pointer_id = im->vfinger_down ? SC_POINTER_ID_GENERIC_FINGER
@@ -982,6 +1150,46 @@ sc_input_manager_process_mouse_button(struct sc_input_manager *im,
 
     if (event->which == SDL_TOUCH_MOUSEID) {
         // simulated from touch events, so it's a duplicate
+        return;
+    }
+
+    if (im->edit_mode) {
+        bool down = event->type == SDL_EVENT_MOUSE_BUTTON_DOWN;
+        if (down && event->button == SDL_BUTTON_LEFT) {
+            struct sc_touch_binding *b =
+                sc_input_manager_touch_binding_at(im, event->x, event->y);
+            if (b) {
+                im->touch_dragging = true;
+                im->drag_binding = b;
+            } else {
+                // start placement: wait for a key press
+                im->touch_placing = true;
+                im->place_x = event->x;
+                im->place_y = event->y;
+                if (im->screen->window_shown) {
+                    sc_screen_render(im->screen, false);
+                }
+            }
+        }
+        if (down && (event->button == SDL_BUTTON_RIGHT ||
+                     event->button == SDL_BUTTON_MIDDLE)) {
+            struct sc_touch_binding *b =
+                sc_input_manager_touch_binding_at(im, event->x, event->y);
+            if (b) {
+                sc_input_manager_remove_touch_binding(im, b);
+                sc_input_manager_save_touch_bindings(im);
+                if (im->screen->window_shown) {
+                    sc_screen_render(im->screen, false);
+                }
+            }
+        }
+        if (!down) {
+            if (im->touch_dragging) {
+                im->touch_dragging = false;
+                im->drag_binding = NULL;
+                sc_input_manager_save_touch_bindings(im);
+            }
+        }
         return;
     }
 

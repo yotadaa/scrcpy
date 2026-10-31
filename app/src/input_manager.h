@@ -42,6 +42,16 @@ struct sc_input_manager {
     struct sc_touch_binding *touch_bindings;
     size_t touch_bindings_count;
 
+    // Visual editor state (BlueStacks-like)
+    bool edit_mode;
+    bool touch_dragging;
+    struct sc_touch_binding *drag_binding;
+    int drag_offset_x; // in window pixels
+    int drag_offset_y;
+    bool touch_placing; // waiting for a key after empty click
+    int place_x; // window pixels
+    int place_y;
+
     uint16_t sdl_shortcut_mods;
 
     bool vfinger_down;
@@ -60,6 +70,8 @@ struct sc_input_manager {
     uint64_t next_sequence; // used for request acknowledgements
 
     bool disconnected;
+
+    const char *touch_map_file;
 };
 
 struct sc_input_manager_params {

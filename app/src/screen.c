@@ -340,7 +340,8 @@ sc_screen_render(struct sc_screen *screen, bool update_content_rect) {
     }
 
     // Overlay for keyboard -> touch bindings (BlueStacks-style on-screen controls)
-    if (!screen->is_icon_active && screen->im.touch_bindings_count > 0) {
+    if (!screen->is_icon_active &&
+        (screen->im.touch_bindings_count > 0 || screen->im.edit_mode)) {
         float pixel_scale = SDL_GetWindowPixelDensity(screen->window);
         if (pixel_scale == 0.0f) {
             pixel_scale = 1.0f;
@@ -403,6 +404,26 @@ sc_screen_render(struct sc_screen *screen, bool update_content_rect) {
                 SDL_RenderDebugText(renderer, wx - 6.0f, wy - 6.0f, b->label);
             } else {
                 // nothing
+            }
+        }
+
+        if (screen->im.edit_mode) {
+            float pixel_scale = SDL_GetWindowPixelDensity(screen->window);
+            if (pixel_scale == 0.0f) pixel_scale = 1.0f;
+
+            SDL_SetRenderDrawColor(renderer, 0, 255, 0, 220);
+            SDL_RenderDebugText(renderer, 10.0f, 10.0f,
+                "EDIT MODE (F9): drag button; click empty then press key; "
+                "right-click to delete; changes auto-save");
+
+            if (screen->im.touch_placing) {
+                float px = screen->im.place_x * pixel_scale;
+                float py = screen->im.place_y * pixel_scale;
+                SDL_SetRenderDrawColor(renderer, 255, 0, 0, 220);
+                SDL_FRect h = { px - 16.0f, py - 2.0f, 32.0f, 4.0f };
+                SDL_FRect v = { px - 2.0f, py - 16.0f, 4.0f, 32.0f };
+                SDL_RenderFillRect(renderer, &h);
+                SDL_RenderFillRect(renderer, &v);
             }
         }
     }
