@@ -24,6 +24,11 @@ struct sc_touch_binding {
     bool pressed;
 };
 
+struct sc_touch_snapshot {
+    struct sc_touch_binding *bindings;
+    size_t count;
+};
+
 struct sc_input_manager {
     struct sc_controller *controller;
     struct sc_file_pusher *fp;
@@ -51,6 +56,15 @@ struct sc_input_manager {
     bool touch_placing; // waiting for a key after empty click
     int place_x; // window pixels
     int place_y;
+
+    bool new_dragging;
+    SDL_Keycode new_drag_key;
+    int new_place_x;
+    int new_place_y;
+
+    struct sc_touch_snapshot *undo_stack;
+    size_t undo_count;
+    size_t undo_capacity;
 
     uint16_t sdl_shortcut_mods;
 

@@ -425,6 +425,34 @@ sc_screen_render(struct sc_screen *screen, bool update_content_rect) {
                 SDL_RenderFillRect(renderer, &h);
                 SDL_RenderFillRect(renderer, &v);
             }
+
+            /* sidebar palette */
+            {
+                int win_w = 0, win_h = 0;
+                SDL_GetWindowSize(screen->window, &win_w, &win_h);
+                float sx = (win_w - 102) * pixel_scale;
+                float sy = 72.0f * pixel_scale;
+                const char *labels[] = { "W","A","S","D","SP","UP","DN","LT","RT","E" };
+                for (int i = 0; i < 10; i++) {
+                    float cy = (sy + i * 40.0f * pixel_scale);
+                    SDL_SetRenderDrawColor(renderer, 40, 40, 40, 180);
+                    SDL_FRect chip = { sx, cy, 94.0f * pixel_scale, 30.0f * pixel_scale };
+                    SDL_RenderFillRect(renderer, &chip);
+                    SDL_SetRenderDrawColor(renderer, 255, 255, 255, 220);
+                    SDL_RenderRect(renderer, &chip);
+                    SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
+                    SDL_RenderDebugText(renderer, sx + 30.0f * pixel_scale,
+                                        cy + 8.0f * pixel_scale, labels[i]);
+                }
+            }
+
+            if (screen->im.new_dragging) {
+                float px = screen->im.new_place_x * pixel_scale;
+                float py = screen->im.new_place_y * pixel_scale;
+                SDL_SetRenderDrawColor(renderer, 0, 200, 255, 220);
+                SDL_FRect r = { px - 18.0f, py - 18.0f, 36.0f, 36.0f };
+                SDL_RenderFillRect(renderer, &r);
+            }
         }
     }
 

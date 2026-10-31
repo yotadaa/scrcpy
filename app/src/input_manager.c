@@ -33,6 +33,15 @@ sc_input_manager_parse_touch_map(struct sc_input_manager *im,
     im->place_x = 0;
     im->place_y = 0;
 
+    im->new_dragging = false;
+    im->new_drag_key = 0;
+    im->new_place_x = 0;
+    im->new_place_y = 0;
+
+    im->undo_stack = NULL;
+    im->undo_count = 0;
+    im->undo_capacity = 0;
+
     if (!path) {
         return;
     }
@@ -237,6 +246,11 @@ sc_input_manager_save_touch_bindings(struct sc_input_manager *im) {
     fclose(f);
     LOGI("Saved %zu touch binding(s) to %s", im->touch_bindings_count, path);
 }
+
+static void sc_input_manager_push_undo(struct sc_input_manager *im);
+static void sc_input_manager_undo(struct sc_input_manager *im);
+static bool sc_input_manager_sidebar_hit(struct sc_input_manager *im, int x, int y,
+                                        SDL_Keycode *out_key);
 
 void
 sc_input_manager_init(struct sc_input_manager *im,
@@ -672,6 +686,12 @@ sc_input_manager_process_key(struct sc_input_manager *im,
         return;
     }
 
+    if (im->edit_mode && down && !repeat && (SDL_GetModState() & SDL_KMOD_CTRL) &&
+        sdl_keycode == SDLK_Z) {
+        sc_input_manager_undo(im);
+        return;
+    }
+
     // Finish pending placement: next key creates a control at the clicked spot
     if (im->edit_mode && im->touch_placing && down && !repeat) {
         struct sc_point point =
@@ -681,6 +701,7 @@ sc_input_manager_process_key(struct sc_input_manager *im,
             point.x = (point.x / im->touch_grid) * im->touch_grid;
             point.y = (point.y / im->touch_grid) * im->touch_grid;
         }
+        sc_input_manager_push_undo(im);
         char *label = strdup(SDL_GetKeyName(sdl_keycode));
         sc_input_manager_append_touch_binding(im, sdl_keycode,
                                              point.x, point.y, label);
@@ -1059,6 +1080,12 @@ sc_input_manager_process_mouse_motion(struct sc_input_manager *im,
             if (im->screen->window_shown) {
                 sc_screen_render(im->screen, false);
             }
+        } else if (im->new_dragging) {
+            im->new_place_x = event->x;
+            im->new_place_y = event->y;
+            if (im->screen->window_shown) {
+                sc_screen_render(im->screen, false);
+            }
         } else if (im->touch_placing) {
             im->place_x = event->x;
             im->place_y = event->y;
@@ -1168,13 +1195,23 @@ sc_input_manager_process_mouse_button(struct sc_input_manager *im,
             struct sc_touch_binding *b =
                 sc_input_manager_touch_binding_at(im, event->x, event->y);
             if (b) {
+                sc_input_manager_push_undo(im);
                 im->touch_dragging = true;
                 im->drag_binding = b;
             } else {
-                // start placement: wait for a key press
-                im->touch_placing = true;
-                im->place_x = event->x;
-                im->place_y = event->y;
+                SDL_Keycode sidebar_key = 0;
+                if (sc_input_manager_sidebar_hit(im, event->x, event->y, &sidebar_key)) {
+                    sc_input_manager_push_undo(im);
+                    im->new_dragging = true;
+                    im->new_drag_key = sidebar_key;
+                    im->new_place_x = event->x;
+                    im->new_place_y = event->y;
+                } else {
+                    // start placement: wait for a key press
+                    im->touch_placing = true;
+                    im->place_x = event->x;
+                    im->place_y = event->y;
+                }
                 if (im->screen->window_shown) {
                     sc_screen_render(im->screen, false);
                 }
@@ -1185,6 +1222,7 @@ sc_input_manager_process_mouse_button(struct sc_input_manager *im,
             struct sc_touch_binding *b =
                 sc_input_manager_touch_binding_at(im, event->x, event->y);
             if (b) {
+                sc_input_manager_push_undo(im);
                 sc_input_manager_remove_touch_binding(im, b);
                 sc_input_manager_save_touch_bindings(im);
                 if (im->screen->window_shown) {
@@ -1197,6 +1235,29 @@ sc_input_manager_process_mouse_button(struct sc_input_manager *im,
                 im->touch_dragging = false;
                 im->drag_binding = NULL;
                 sc_input_manager_save_touch_bindings(im);
+            }
+            if (im->new_dragging) {
+                im->new_dragging = false;
+                int wx = im->new_place_x;
+                int wy = im->new_place_y;
+                // if dropped inside video content, create
+                if (im->screen->video) {
+                    struct sc_point point =
+                        sc_screen_convert_window_to_frame_coords(im->screen, wx, wy);
+                    if (point.x >= 0 && point.y >= 0) {
+                        if (im->touch_grid > 1) {
+                            point.x = (point.x / im->touch_grid) * im->touch_grid;
+                            point.y = (point.y / im->touch_grid) * im->touch_grid;
+                        }
+                        char *label = strdup(SDL_GetKeyName(im->new_drag_key));
+                        sc_input_manager_append_touch_binding(im, im->new_drag_key,
+                                                             point.x, point.y, label);
+                        free(label);
+                        sc_input_manager_save_touch_bindings(im);
+                    }
+                }
+                im->new_drag_key = 0;
+                if (im->screen->window_shown) sc_screen_render(im->screen, false);
             }
         }
         return;
@@ -1533,6 +1594,71 @@ sc_input_manager_release_touch_bindings(struct sc_input_manager *im) {
     }
 }
 
+
+static void
+sc_input_manager_push_undo(struct sc_input_manager *im) {
+    if (im->undo_count == im->undo_capacity) {
+        size_t newcap = im->undo_capacity ? im->undo_capacity * 2 : 8;
+        struct sc_touch_snapshot *tmp = realloc(im->undo_stack,
+                                              newcap * sizeof(*tmp));
+        if (!tmp) { LOG_OOM(); return; }
+        im->undo_stack = tmp;
+        im->undo_capacity = newcap;
+    }
+    struct sc_touch_snapshot *snap = &im->undo_stack[im->undo_count++];
+    snap->count = im->touch_bindings_count;
+    if (snap->count) {
+        snap->bindings = malloc(snap->count * sizeof(*snap->bindings));
+        if (!snap->bindings) { LOG_OOM(); im->undo_count--; return; }
+        memcpy(snap->bindings, im->touch_bindings, snap->count*sizeof(*snap->bindings));
+        for (size_t i = 0; i < snap->count; i++) {
+            snap->bindings[i].label = snap->bindings[i].label ? strdup(snap->bindings[i].label) : NULL;
+        }
+    } else {
+        snap->bindings = NULL;
+    }
+}
+
+static void
+sc_input_manager_undo(struct sc_input_manager *im) {
+    if (im->undo_count == 0) { return; }
+    struct sc_touch_snapshot *snap = &im->undo_stack[--im->undo_count];
+    // free current
+    for (size_t i = 0; i < im->touch_bindings_count; i++) {
+        free(im->touch_bindings[i].label);
+    }
+    free(im->touch_bindings);
+    im->touch_bindings = snap->bindings;
+    im->touch_bindings_count = snap->count;
+    snap->bindings = NULL;
+    snap->count = 0;
+    sc_input_manager_save_touch_bindings(im);
+    if (im->screen->window_shown) sc_screen_render(im->screen, false);
+}
+
+static bool
+sc_input_manager_sidebar_hit(struct sc_input_manager *im, int x, int y,
+                            SDL_Keycode *out_key) {
+    // Simple right-side palette: keys
+    static const SDL_Keycode keys[] = {
+        SDLK_W, SDLK_A, SDLK_S, SDLK_D, SDLK_SPACE,
+        SDLK_UP, SDLK_DOWN, SDLK_LEFT, SDLK_RIGHT, SDLK_E
+    };
+    int win_w = 0, win_h = 0;
+    SDL_GetWindowSize(im->screen->window, &win_w, &win_h);
+    int sidebar_x = win_w - 110;
+    if (x < sidebar_x) return false;
+    int chip_h = 34;
+    int start_y = 80;
+    for (size_t i = 0; i < sizeof(keys)/sizeof(keys[0]); i++) {
+        int cy = start_y + (int)i * (chip_h + 6);
+        if (y >= cy && y < cy + chip_h && x >= sidebar_x + 8 && x < win_w - 8) {
+            *out_key = keys[i];
+            return true;
+        }
+    }
+    return false;
+}
 void
 sc_input_manager_handle_event(struct sc_input_manager *im,
                               const SDL_Event *event) {
