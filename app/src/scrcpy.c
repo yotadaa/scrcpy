@@ -812,6 +812,22 @@ aoa_complete:
     // There is a controller if and only if control is enabled
     assert(options->control == !!controller);
 
+    const char *touch_map = options->touch_map;
+    char *profile_path = NULL;
+    if (options->touch_profile && !touch_map) {
+        const char *home = getenv("HOME");
+        if (home) {
+            char profile_file[512];
+            snprintf(profile_file, sizeof(profile_file),
+                     "%s/.config/scrcpy/touchmap.%s.txt",
+                     home, options->touch_profile);
+            profile_path = strdup(profile_file);
+            if (profile_path) {
+                touch_map = profile_path;
+            }
+        }
+    }
+
     if (options->window) {
         struct sc_screen_params screen_params = {
             .video = options->video_playback,
@@ -826,7 +842,8 @@ aoa_complete:
             .legacy_paste = options->legacy_paste,
             .clipboard_autosync = options->clipboard_autosync,
             .shortcut_mods = options->shortcut_mods,
-            .touch_map = options->touch_map,
+            .touch_map = touch_map,
+            .touch_grid = options->touch_grid,
             .window_title = window_title,
             .always_on_top = options->always_on_top,
             .window_x = options->window_x,

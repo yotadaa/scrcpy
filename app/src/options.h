@@ -268,6 +268,8 @@ struct scrcpy_options {
     const char *record_filename;
     const char *window_title;
     const char *touch_map;
+    const char *touch_profile;
+    int touch_grid;
     const char *push_target;
     const char *render_driver;
     const char *video_codec_options;

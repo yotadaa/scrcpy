@@ -258,6 +258,7 @@ sc_input_manager_init(struct sc_input_manager *im,
     im->legacy_paste = params->legacy_paste;
     im->clipboard_autosync = params->clipboard_autosync;
     im->touch_map_file = params->touch_map_file;
+    im->touch_grid = params->touch_grid > 0 ? params->touch_grid : 1;
 
     im->touch_bindings = NULL;
     im->touch_bindings_count = 0;
@@ -676,6 +677,10 @@ sc_input_manager_process_key(struct sc_input_manager *im,
         struct sc_point point =
             sc_screen_convert_window_to_frame_coords(im->screen,
                                                     im->place_x, im->place_y);
+        if (im->touch_grid > 1) {
+            point.x = (point.x / im->touch_grid) * im->touch_grid;
+            point.y = (point.y / im->touch_grid) * im->touch_grid;
+        }
         char *label = strdup(SDL_GetKeyName(sdl_keycode));
         sc_input_manager_append_touch_binding(im, sdl_keycode,
                                              point.x, point.y, label);
@@ -1045,6 +1050,10 @@ sc_input_manager_process_mouse_motion(struct sc_input_manager *im,
             struct sc_point point =
                 sc_screen_convert_window_to_frame_coords(im->screen,
                                                         event->x, event->y);
+            if (im->touch_grid > 1) {
+                point.x = (point.x / im->touch_grid) * im->touch_grid;
+                point.y = (point.y / im->touch_grid) * im->touch_grid;
+            }
             im->drag_binding->x = point.x;
             im->drag_binding->y = point.y;
             if (im->screen->window_shown) {

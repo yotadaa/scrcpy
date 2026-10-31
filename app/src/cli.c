@@ -113,6 +113,8 @@ enum {
     OPT_NO_TERMINAL_TITLE,
     OPT_HWDEC,
     OPT_TOUCH_MAP,
+    OPT_TOUCH_PROFILE,
+    OPT_TOUCH_GRID,
 };
 
 struct sc_option {
@@ -1049,6 +1051,18 @@ static const struct sc_option options[] = {
         .longopt = "touch-map",
         .argdesc = "file",
         .text = "Load a touch binding map (key x y [label] per line).",
+    },
+    {
+        .longopt_id = OPT_TOUCH_PROFILE,
+        .longopt = "touch-profile",
+        .argdesc = "name",
+        .text = "Load/save touch bindings under this profile name.",
+    },
+    {
+        .longopt_id = OPT_TOUCH_GRID,
+        .argdesc = "size",
+        .longopt = "touch-grid",
+        .text = "Snap touch control positions to a grid (default 1 = no snap).",
     },
     {
         .longopt_id = OPT_WINDOW_X,
@@ -2697,6 +2711,18 @@ parse_args_with_getopt(struct scrcpy_cli_args *args, int argc, char *argv[],
                 break;
             case OPT_TOUCH_MAP:
                 opts->touch_map = optarg;
+                break;
+            case OPT_TOUCH_PROFILE:
+                opts->touch_profile = optarg;
+                break;
+            case OPT_TOUCH_GRID:
+                {
+                    long value;
+                    if (!parse_integer_arg(optarg, &value, false, 1, 200, "touch-grid")) {
+                        return false;
+                    }
+                    opts->touch_grid = (int) value;
+                }
                 break;
             case OPT_WINDOW_X:
                 if (!parse_window_position(optarg, &opts->window_x)) {

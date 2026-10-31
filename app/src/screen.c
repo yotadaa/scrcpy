@@ -793,6 +793,7 @@ sc_screen_init(struct sc_screen *screen,
         .clipboard_autosync = params->clipboard_autosync,
         .shortcut_mods = params->shortcut_mods,
         .touch_map_file = params->touch_map,
+        .touch_grid = params->touch_grid,
     };
 
     sc_input_manager_init(&screen->im, &im_params);

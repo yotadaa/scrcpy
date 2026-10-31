@@ -72,6 +72,7 @@ struct sc_input_manager {
     bool disconnected;
 
     const char *touch_map_file;
+    int touch_grid;
 };
 
 struct sc_input_manager_params {
@@ -87,6 +88,7 @@ struct sc_input_manager_params {
     bool legacy_paste;
     bool clipboard_autosync;
     const char *touch_map_file;
+    int touch_grid;
     uint8_t shortcut_mods; // OR of enum sc_shortcut_mod values
 };
 

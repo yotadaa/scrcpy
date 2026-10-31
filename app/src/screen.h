@@ -129,6 +129,7 @@ struct sc_screen_params {
     bool clipboard_autosync;
     uint8_t shortcut_mods; // OR of enum sc_shortcut_mod values
     const char *touch_map;
+    int touch_grid;
 
     const char *window_title;
     bool always_on_top;
